@@ -1,0 +1,134 @@
+
+# install packages 
+install.packages("Amelia")
+install.packages("DMwR")
+install.packages("caret")
+install.packages("randomForest")
+
+
+#**********Understanding data**********
+
+#Reading Train and Test Data sets
+
+set.seed(1234)
+train_data<- read.csv("train.csv")
+test_data<- read.csv("test.csv")
+
+library(Amelia)
+dim(train_data)
+summary(train_data)
+str(train_data)
+summary(test_data)
+str(test_data)
+dim(test_data)
+
+sum(is.na(test_data))
+sum(is.na(train_data))
+
+
+#*****************DATA PREPERATION TRAIN **************** 
+
+# remove few useless columns
+train_data1 <- subset(train_data,select=-c(ModelOfTheVehicle,VehicleID,NameOfTheVehicle,SellerType,OfferType,NumberOfPictures,ZipCode,DateOfAdCreation,DateOfAdLastSeen))
+
+test_data1 <- subset(test_data,select=-c(ModelOfTheVehicle,VehicleID,NameOfTheVehicle,SellerType,OfferType,NumberOfPictures,ZipCode,DateOfAdCreation,DateOfAdLastSeen))
+
+# Age of vehicle calculation
+library(data.table)
+DataCollectedDate1 <- format(as.POSIXct(train_data1$DataCollectedDate, format = '%d-%m-%Y %H:%M'), format = '%Y') 
+End_Date <- as.integer(DataCollectedDate1)
+Agemonths <- (End_Date-train_data1$YearOfVehicleRegistration)*12
+train_data2 <- cbind(train_data1,Agemonths)
+train_data3 <- subset(train_data2,select=-c(DataCollectedDate,YearOfVehicleRegistration,MonthOfVehicleRegistration))
+
+DataCollectedDate2 <- format(as.POSIXct(test_data1$DataCollectedDate, format = '%d-%m-%Y %H:%M'), format = '%Y') 
+End_Date1 <- as.integer(DataCollectedDate2)
+Agemonths <- (End_Date1-test_data1$YearOfVehicleRegistration)*12
+test_data2 <- cbind(test_data1,Agemonths)
+test_data3 <- subset(test_data2,select=-c(DataCollectedDate,YearOfVehicleRegistration,MonthOfVehicleRegistration))
+str(test_data3)
+
+#Omitting NA value rows
+library(DMwR)
+train_data4 <- train_data3[is.na(train_data3$VehicleType)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$GearBoxType)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$PowerOfTheEngine)==FALSE,]
+#train_data4 <- train_data4[is.na(train_data4$ModelOfTheVehicle)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$DistranceTravelled)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$TypeOfTheFuelUsed)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$BrandOfTheVehicle)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$IsDamageRepaired)==FALSE,]
+train_data4 <- train_data4[is.na(train_data4$Agemonths)==FALSE,]
+str(train_data4)
+
+# #missing value imputation in TEST using KNN
+library(DMwR)
+test_data4<-knnImputation(test_data3,k=3) #KNN Imputation
+sum(is.na(test_data4))
+
+
+# Preprocessing on TRAIN Data
+
+library(caret)
+#Remove price column from Train data4 / preProcess - for standardizing 
+#Creating dummy variables and adding to original table
+
+# library(dummies)
+# train_data4$ModelOfTheVehicle<-dummy(train_data4$ModelOfTheVehicle)
+
+Price <- train_data4$Price
+train_data5 <- subset(train_data4,select=-c(Price))
+Pr <- preProcess(x=train_data5,method=c('center','scale'))
+train_std <- predict(Pr,train_data5)
+train_data6 <- cbind(Price,train_std) # standardised
+train_indices <- createDataPartition(y=train_data6$Price,p=0.85,list=F)
+train_rows <- train_data6[train_indices,]
+train_val <- train_data6[-train_indices,]
+dim(train_rows);dim(train_val)
+
+# Preprocessing on TEST Data
+test_std <- predict(Pr,test_data4)
+str(test_std)
+
+# Linear Regression & STEP AIC
+lm_train <- lm(formula = Price~., data = train_rows)
+summary(lm_train)
+par(mfrow= c(2,2))
+plot(lm_train) # plotting residuals
+pred_model_lm <- predict(lm_train,train_val)# prediction on validation data set
+regr.eval(train_val$Price, pred_model_lm) #ERROR METRICS for Linear Regression
+
+#Running Decision Tree Regression Now
+library(rpart)
+library(rpart.plot)
+Decision_Tree_rpart <- rpart(Price~., data=train_rows)
+summary(Decision_Tree_rpart)
+plotcp(Decision_Tree_rpart)
+rpart.plot(Decision_Tree_rpart)
+predict_DTree <-predict(Decision_Tree_rpart,train_val[,-1])
+regr.eval(train_val$Price, predict_DTree) #ERROR METRICS for RPART  
+
+#Random forest on the dataset
+library(randomForest)
+model_fit <- randomForest(Price ~ VehicleType + GearBoxType+ DistranceTravelled + PowerOfTheEngine
+                          + BrandOfTheVehicle + Agemonths+IsDamageRepaired+TypeOfTheFuelUsed,
+                          data = train_rows, importance = TRUE, ntree = 50)
+
+predict_forest <-predict(model_fit,train_val[,-1])
+
+regr.eval(train_val$Price, predict_forest) #ERROR METRICS for RPART  
+
+str(test_std)
+str(model_fit)
+model_fit$predicted
+str(train_val)
+ 
+levels(test_std$BrandOfTheVehicle) <- levels(train_rows$BrandOfTheVehicle) # changing the levels
+
+# prediciton on TEST DATA
+pred_on_Test <- predict(model_fit,test_std) # prediction on validation data set
+pred_on_Test <- predict(model_fit,test_std, type = 'response') # prediction on validation data set
+
+str(pred_on_Test)
+write.csv(file="Checking_Predictions.csv",pred_on_Test)
+
